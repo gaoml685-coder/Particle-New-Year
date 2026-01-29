@@ -1,0 +1,509 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D 粒子手势交互系统 AI 版</title>
+    <!-- 优先加载核心库 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+    <style>
+        :root {
+            --primary: #00f2ff;
+            --bg: #0a0a0c;
+            --panel: rgba(15, 15, 20, 0.85);
+            --accent: #ff007a;
+            --gold: #FFD700;
+            --red: #FF4500;
+        }
+
+        body, html {
+            margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden;
+            background-color: var(--bg); font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;
+            color: white; user-select: none;
+        }
+
+        #canvas-container { width: 100%; height: 100%; }
+        #video-element { display: none; }
+        #hand-preview {
+            position: fixed; bottom: 20px; right: 20px; width: 140px; height: 105px;
+            border-radius: 10px; border: 1.5px solid var(--primary);
+            transform: scaleX(-1); background: #000; z-index: 10; opacity: 0.7;
+        }
+
+        .ui-panel {
+            position: fixed; top: 20px; left: 20px; background: var(--panel);
+            backdrop-filter: blur(15px); border-radius: 16px; border: 1px solid rgba(255, 255, 255, 0.1);
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5); z-index: 100; width: 240px; overflow: hidden;
+        }
+
+        .panel-header {
+            padding: 10px 14px; background: rgba(255, 255, 255, 0.08);
+            cursor: move; display: flex; justify-content: space-between; align-items: center;
+        }
+
+        .panel-header h1 {
+            font-size: 0.85rem; margin: 0; font-weight: bold;
+            background: linear-gradient(90deg, #fff, var(--primary));
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        }
+
+        #collapse-btn { cursor: pointer; font-size: 0.7rem; opacity: 0.7; padding: 2px 6px; background: rgba(255,255,255,0.1); border-radius: 4px; }
+        .panel-content { padding: 12px; max-height: 80vh; overflow-y: auto; }
+        .panel-content.collapsed { display: none; }
+
+        .gesture-hint { font-size: 0.65rem; color: var(--primary); margin-bottom: 10px; opacity: 0.8; }
+        .control-group { margin-bottom: 12px; }
+        label { display: block; font-size: 0.65rem; margin-bottom: 5px; color: #999; text-transform: uppercase; }
+        .btn-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 5px; }
+        
+        button {
+            background: rgba(255, 255, 255, 0.06); border: 1px solid rgba(255, 255, 255, 0.08);
+            color: white; padding: 5px 2px; border-radius: 5px; cursor: pointer; font-size: 0.7rem;
+            display: flex; align-items: center; justify-content: center; transition: all 0.3s;
+        }
+        button:hover { background: rgba(255, 255, 255, 0.12); border-color: var(--primary); }
+        button.active { background: var(--primary); color: black; font-weight: bold; }
+        
+        .ai-btn { width: 100%; margin-top: 5px; background: linear-gradient(45deg, var(--accent), #ff8c00); border: none; font-weight: bold; height: 28px; transition: all 0.4s ease; cursor: pointer; }
+        #ai-generate-btn:hover {
+            background: linear-gradient(45deg, var(--red), var(--gold)) !important;
+            box-shadow: 0 0 15px rgba(255, 69, 0, 0.5);
+            color: white;
+            transform: translateY(-1px);
+        }
+
+        #lucky-star-trigger {
+            position: fixed; bottom: 40px; left: 50%; transform: translateX(-50%);
+            z-index: 200; display: none; background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px); border: 2px solid var(--primary);
+            padding: 12px 30px; border-radius: 50px; color: white;
+            font-weight: bold; font-size: 1.1rem; cursor: pointer;
+            box-shadow: 0 0 20px rgba(0, 242, 255, 0.2);
+            animation: pulse-glow 2s infinite ease-in-out;
+            transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            align-items: center; gap: 10px;
+        }
+        #lucky-star-trigger:hover { background: var(--primary); color: black; transform: translateX(-50%) scale(1.1); box-shadow: 0 0 30px var(--primary); }
+
+        @keyframes pulse-glow {
+            0% { box-shadow: 0 0 10px rgba(0, 242, 255, 0.2); border-color: rgba(0, 242, 255, 0.5); }
+            50% { box-shadow: 0 0 25px rgba(0, 242, 255, 0.6); border-color: rgba(0, 242, 255, 1); }
+            100% { box-shadow: 0 0 10px rgba(0, 242, 255, 0.2); border-color: rgba(0, 242, 255, 0.5); }
+        }
+
+        .music-btn { width: 100%; margin-top: 4px; background: rgba(255,255,255,0.03); border: 1px solid var(--primary); color: var(--primary); height: 26px; }
+        input[type="color"] { width: 100%; height: 24px; border: none; border-radius: 4px; background: none; cursor: pointer; }
+        
+        .fullscreen-btn {
+            position: fixed; top: 20px; right: 20px; width: 36px; height: 36px; border-radius: 10px;
+            display: flex; align-items: center; justify-content: center; font-size: 1rem;
+            z-index: 100; background: var(--panel); border: 1px solid rgba(255, 255, 255, 0.1); cursor: pointer;
+        }
+        
+        #hint-overlay {
+            position: fixed; bottom: 25px; left: 50%; transform: translateX(-50%);
+            background: rgba(0,0,0,0.5); padding: 6px 18px; border-radius: 30px; pointer-events: none;
+            font-size: 0.75rem; z-index: 5; color: rgba(255,255,255,0.7);
+        }
+
+        .loading-screen {
+            position: fixed; inset: 0; background: var(--bg); display: flex;
+            flex-direction: column; align-items: center; justify-content: center; z-index: 1000;
+        }
+        .loader { width: 30px; height: 30px; border: 2px solid #FFF; border-bottom-color: var(--primary); border-radius: 50%; animation: rotation 1s linear infinite; }
+        @keyframes rotation { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .toast { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0,0,0,0.9); padding: 12px 24px; border-radius: 50px; z-index: 1001; display: none; border: 1px solid var(--primary); font-size: 0.8rem; }
+    </style>
+</head>
+<body>
+
+    <div id="loading" class="loading-screen">
+        <span class="loader"></span>
+        <p style="margin-top: 15px; color: var(--primary); font-size: 0.8rem;">正在载入马年治愈空间...</p>
+    </div>
+
+    <div id="toast" class="toast">正在抽取幸运签...</div>
+
+    <!-- 交互触发按钮 -->
+    <div id="lucky-star-trigger">✨ 抽取2026幸运签</div>
+
+    <div id="draggable-panel" class="ui-panel">
+        <div class="panel-header" id="panel-handle">
+            <h1>粒子交互 Pro</h1>
+            <div id="collapse-btn">收起 ▴</div>
+        </div>
+        <div class="panel-content" id="panel-main">
+            <div class="gesture-hint">1/2/3, 6(H), 8(新), 9(❤️), 👍(抽)</div>
+            <div class="control-group">
+                <label>预设模型</label>
+                <div class="btn-grid" id="model-selector">
+                    <button data-text="Bye-bye 2025" class="active">Bye 25</button>
+                    <button data-text="新春快乐">新春</button>
+                    <button data-text="Hello 2026">Hello</button>
+                    <button data-text="爱心">爱心❤️</button>
+                    <button data-text="3">3</button>
+                    <button data-text="2">2</button>
+                    <button data-text="1">1</button>
+                </div>
+            </div>
+            <div class="control-group ai-section">
+                <label>✨ AI 幸运签</label>
+                <button class="ai-btn" id="ai-generate-btn">✨ 抽取2026幸运签</button>
+                <button class="ai-btn" id="ai-tts-btn" style="background: rgba(255,255,255,0.05); border: 1px solid var(--primary); color: var(--primary); height: 26px;">🔊 语音播报</button>
+            </div>
+            <div class="control-group">
+                <label>🎵 环境音</label>
+                <button id="music-toggle" class="music-btn">🎵 开启音乐</button>
+            </div>
+            <div class="control-group">
+                <label id="color-label">🎨 模型调色</label>
+                <input type="color" id="color-picker" value="#00f2ff">
+            </div>
+            <div class="status">
+                <div id="camera-status" class="indicator"></div>
+                <span id="status-text">视觉就绪</span>
+            </div>
+        </div>
+    </div>
+
+    <button class="fullscreen-btn" id="fs-btn">⛶</button>
+    <div id="hint-overlay">🖐️ 缩放 | 🔄 旋转 | 🤟 手势切换模型 | 👍 抽取幸运签</div>
+
+    <video id="video-element" playsinline></video>
+    <canvas id="hand-preview"></canvas>
+    <div id="canvas-container"></div>
+
+    <script>
+        // --- 预设幸运签库 ---
+        const localSlips = ["马到成功", "龙马精神", "一马当先", "跃马扬鞭", "万事胜意", "岁岁平安", "心想事成", "大吉大利", "前程似锦", "好运连连", "平安喜乐", "万象更新"];
+
+        // --- 变量初始化 ---
+        const audio = new Audio('https://www.soundhelix.com/examples/mp3/SoundHelix-Song-8.mp3'); 
+        audio.loop = true;
+        let isPlaying = false;
+        
+        const apiKey = "";
+        const GEMINI_TEXT_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+        const GEMINI_TTS_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${apiKey}`;
+
+        let scene, camera, renderer, particleSystem, particleCount = 20000;
+        let positions, targets, velocities, colors, currentText = "Bye-bye 2025";
+        
+        const modelColors = { 
+            "Bye-bye 2025": "#00f2ff", 
+            "新春快乐": "#ff2244", 
+            "Hello 2026": "#ffd700", 
+            "爱心": "#ff3366", 
+            "3": "#ff00ff", 
+            "2": "#00ff00", 
+            "1": "#ff8800", 
+            "AI_GREETING": "#FD8B47" 
+        };
+
+        let targetScale = 1.0, handOpenScale = 1.0, targetRotY = 0, currentRotY = 0;
+        let fireworkPool = [], fireworkParticles, MAX_FIREWORKS = 8;
+        let lastFireworkTime = 0;
+        let isDrawing = false; 
+
+        function createGlowTexture() {
+            const canvas = document.createElement('canvas'); canvas.width = 64; canvas.height = 64;
+            const ctx = canvas.getContext('2d');
+            const gradient = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+            gradient.addColorStop(0, 'rgba(255,255,255,1)');
+            gradient.addColorStop(0.2, 'rgba(255,255,255,0.8)');
+            gradient.addColorStop(0.5, 'rgba(255,255,255,0.3)');
+            gradient.addColorStop(1, 'rgba(255,255,255,0)');
+            ctx.fillStyle = gradient; ctx.fillRect(0, 0, 64, 64);
+            return new THREE.CanvasTexture(canvas);
+        }
+
+        async function fetchWithRetry(url, payload) {
+            for (let i = 0; i < 5; i++) {
+                try {
+                    const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+                    if (res.ok) return await res.json();
+                } catch (e) { await new Promise(r => setTimeout(r, Math.pow(2, i) * 1000)); }
+            }
+        }
+
+        async function generateAIGreeting() {
+            if (isDrawing) return;
+            isDrawing = true;
+            const btn = document.getElementById('ai-generate-btn');
+            btn.disabled = true;
+            
+            const randomLocal = localSlips[Math.floor(Math.random() * localSlips.length)];
+            switchModel(randomLocal);
+            
+            const toast = document.getElementById('toast');
+            toast.innerText = "✨ 正在为您抽取马年幸运签...";
+            toast.style.display = 'block';
+
+            try {
+                const res = await fetchWithRetry(GEMINI_TEXT_URL, { 
+                    contents: [{ parts: [{ text: "请为 2026 马年生成一个极短的4字治愈系新年签语，例如'马到成功'。严禁出现龙年字样。不含标点。" }] }] 
+                });
+                const aiText = res?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+                
+                if (aiText && aiText.length >= 2) {
+                    setTimeout(() => {
+                        switchModel(aiText.substring(0, 4));
+                        toast.innerText = "✨ 马年幸运签抽取成功！";
+                        setTimeout(() => toast.style.display = 'none', 2000);
+                        isDrawing = false;
+                    }, 800);
+                } else {
+                    setTimeout(() => { toast.style.display = 'none'; isDrawing = false; }, 1000);
+                }
+            } catch (e) {
+                toast.style.display = 'none';
+                isDrawing = false;
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        function pcmToWav(base64, rate) {
+            const buf = Uint8Array.from(atob(base64), c => c.charCodeAt(0)).buffer;
+            const header = new ArrayBuffer(44); const v = new DataView(header);
+            const s = (o, str) => { for (let i = 0; i < string.length; i++) v.setUint8(o + i, string.charCodeAt(i)); };
+            s(0, 'RIFF'); v.setUint32(4, 32 + buf.byteLength, true); s(8, 'WAVE'); s(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true); v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true); s(36, 'data'); v.setUint32(40, buf.byteLength, true);
+            return new Blob([header, buf], { type: 'audio/wav' });
+        }
+
+        class Firework {
+            constructor() { 
+                this.active = false; this.ps = []; this.particleCount = 150;
+                for(let i=0; i<this.particleCount; i++) this.ps.push({ pos: new THREE.Vector3(), vel: new THREE.Vector3(), alpha: 1, color: new THREE.Color() });
+            }
+            launch(x, y, z, sizeFactor = 1.0) {
+                this.active = true; this.timer = 1.0; 
+                const colorKey = modelColors[currentText] ? currentText : "AI_GREETING";
+                const c = new THREE.Color(modelColors[colorKey]);
+                this.ps.forEach(p => { 
+                    p.pos.set(x, y, z); 
+                    const angle = Math.random() * Math.PI * 2, phi = Math.random() * Math.PI, speed = (Math.random() * 2.5 + 1.5) * sizeFactor;
+                    p.vel.set(Math.sin(phi)*Math.cos(angle)*speed, Math.sin(phi)*Math.sin(angle)*speed, Math.cos(phi)*speed);
+                    p.alpha = 1.0; p.color.copy(c).offsetHSL(Math.random()*0.1-0.05, 0, 0.1);
+                });
+            }
+            update() { 
+                if(!this.active) return; this.timer -= 0.015; if(this.timer <= 0) this.active = false;
+                this.ps.forEach(p => { p.pos.add(p.vel); p.vel.y -= 0.02; p.alpha = Math.max(0, this.timer); });
+            }
+        }
+
+        function initThree() {
+            if (typeof THREE === 'undefined') { setTimeout(initThree, 100); return; }
+            scene = new THREE.Scene(); 
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 2000); camera.position.z = 350;
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true }); 
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); 
+            document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+            const geo = new THREE.BufferGeometry(); 
+            positions = new Float32Array(particleCount*3); targets = new Float32Array(particleCount*3); 
+            velocities = new Float32Array(particleCount*3); colors = new Float32Array(particleCount*3);
+            geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+            
+            particleSystem = new THREE.Points(geo, new THREE.PointsMaterial({ 
+                size: 2.2, vertexColors: true, map: createGlowTexture(),
+                transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false
+            }));
+            scene.add(particleSystem);
+
+            const fwGeo = new THREE.BufferGeometry(); 
+            fwGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(MAX_FIREWORKS * 150 * 3), 3)); 
+            fwGeo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(MAX_FIREWORKS * 150 * 3), 3));
+            fireworkParticles = new THREE.Points(fwGeo, new THREE.PointsMaterial({size: 2.8, vertexColors: true, transparent: true, blending: THREE.AdditiveBlending}));
+            scene.add(fireworkParticles); 
+            for(let i=0; i<MAX_FIREWORKS; i++) fireworkPool.push(new Firework());
+
+            generateTextPoints(currentText); 
+            window.onresize = () => { camera.aspect = window.innerWidth/window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight); };
+            animate();
+        }
+
+        function generateTextPoints(text) {
+            const cvs = document.createElement('canvas'); const ctx = cvs.getContext('2d'); cvs.width = 512; cvs.height = 256; ctx.fillStyle = 'white'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+            
+            if (text === "爱心") {
+                const x=256, y=42, r=90; 
+                ctx.beginPath(); ctx.moveTo(x, y+r*0.4); ctx.bezierCurveTo(x,y,x-r*1.2,y,x-r*1.2,y+r*0.6); ctx.bezierCurveTo(x-r*1.2,y+r*1.2,x,y+r*1.6,x,y+r*2.1); ctx.bezierCurveTo(x,y+r*1.6,x+r*1.2,y+r*1.2,x+r*1.2,y+r*0.6); ctx.bezierCurveTo(x+r*1.2,y,x,y,x,y+r*0.4); ctx.fill();
+            } else if (text === "新春快乐") { 
+                ctx.font = 'bold 85px sans-serif'; ctx.fillText("新春", 256, 78); ctx.fillText("快乐", 256, 178); 
+            } else if (text === "Bye-bye 2025") { 
+                ctx.font = 'bold 75px sans-serif'; ctx.fillText("Bye-bye", 256, 88); ctx.fillText("2025", 256, 178); 
+            } else { 
+                ctx.font = `bold ${text.length > 4 ? 70 : 110}px sans-serif`; ctx.fillText(text, 256, 128); 
+            }
+            
+            const data = ctx.getImageData(0, 0, 512, 256).data; const pts = [];
+            let minX=512, maxX=0, minY=256, maxY=0;
+            for (let y=0; y<256; y+=2) for (let x=0; x<512; x+=2) if (data[(y*512+x)*4+3]>140) { pts.push({x,y}); minX=Math.min(minX,x); maxX=Math.max(maxX,x); minY=Math.min(minY,y); maxY=Math.max(maxY,y); }
+            const cX = (minX+maxX)/2, cY = (minY+maxY)/2, w = maxX-minX, h = maxY-minY;
+            const activeKey = modelColors[text] ? text : "AI_GREETING";
+            const baseCol = new THREE.Color(modelColors[activeKey]);
+
+            for (let i=0; i<particleCount; i++) {
+                const p = pts[i%pts.length]; const i3 = i*3; targets[i3] = (p.x-256)*1.4; targets[i3+1] = (128-p.y)*1.4;
+                if(text === "爱心") { 
+                    const dx = (p.x-cX)/(w/2||1), dy = (p.y-cY)/(h/2||1), d = Math.sqrt(dx*dx + dy*dy);
+                    let z = Math.sqrt(Math.max(0, 1.0 - d * 0.88)) * 55;
+                    const isFront = (i % 2 === 0); targets[i3+2] = (isFront ? 1 : -1) * (z + (Math.random()-0.5)*5);
+                    const br = isFront ? (0.7 + z/55 * 0.3) : (0.4 + z/55 * 0.2);
+                    const pCol = baseCol.clone().multiplyScalar(br); if (isFront && z > 45) pCol.addScalar(0.15);
+                    colors[i3] = pCol.r; colors[i3+1] = pCol.g; colors[i3+2] = pCol.b;
+                } else {
+                    targets[i3+2] = (Math.random()-0.5)*35; colors[i3] = baseCol.r; colors[i3+1] = baseCol.g; colors[i3+2] = baseCol.b;
+                }
+            }
+            particleSystem.geometry.attributes.color.needsUpdate = true;
+        }
+
+        function initHandTracking() {
+            const hands = new Hands({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}` });
+            hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.6, minTrackingConfidence: 0.6 });
+            hands.onResults(results => {
+                const preview = document.getElementById('hand-preview');
+                const ctx = preview.getContext('2d'); ctx.clearRect(0,0,140,105);
+                if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                    const lm = results.multiHandLandmarks[0];
+                    drawConnectors(ctx, lm, HAND_CONNECTIONS, {color: '#00f2ff', lineWidth: 1.5});
+                    targetRotY = (0.5 - lm[0].x) * (Math.PI / 1.6);
+                    const dist = Math.hypot(lm[8].x - lm[0].x, lm[8].y - lm[0].y);
+                    targetScale = dist > 0.45 ? 0.35 : (dist < 0.22 ? 4.5 : 1.0);
+                    
+                    const gesture = recognizeGesture(lm);
+                    if (gesture === "THUMBS_UP") {
+                        if (currentText === "爱心") generateAIGreeting();
+                        return;
+                    }
+                    if (gesture && gesture !== currentText && gesture !== "THUMBS_UP") {
+                        switchModel(gesture);
+                    }
+                } else { targetRotY = 0; targetScale = 1.0; }
+            });
+            new Camera(document.getElementById('video-element'), { onFrame: async () => await hands.send({ image: document.getElementById('video-element') }), width: 640, height: 480 }).start().then(() => {
+                document.getElementById('camera-status').classList.add('active'); 
+                document.getElementById('loading').style.display='none';
+            });
+        }
+
+        function recognizeGesture(lm) {
+            const dist = (p1, p2) => Math.hypot(p1.x-p2.x, p1.y-p2.y);
+            const wrist = lm[0];
+            const d8 = dist(lm[8], wrist), d12 = dist(lm[12], wrist);
+            const isUp = (t, p) => lm[t].y < lm[p].y;
+            const iU = isUp(8,6), mU = isUp(12,10), rU = isUp(16,14), pU = isUp(20,18);
+            const thumbTip = lm[4], thumbBase = lm[2];
+            const thumbExtended = dist(lm[4], lm[9]) > 0.16;
+
+            if (thumbTip.y < thumbBase.y && !iU && !mU && !rU && !pU) return "THUMBS_UP";
+            if (d8 < d12 * 0.75 && mU && rU && pU) return "爱心";
+            if (thumbExtended && iU && !mU && !rU && !pU) return "新春快乐";
+            if (thumbExtended && pU && !iU && !mU && !rU) return "Hello 2026";
+            if (iU && mU && rU && !pU && !thumbExtended) return "3";
+            if (iU && mU && !rU && !pU && !thumbExtended) return "2";
+            if (iU && !mU && !rU && !pU && !thumbExtended) return "1";
+            return null;
+        }
+
+        function switchModel(text) {
+            currentText = text; generateTextPoints(text);
+            document.querySelectorAll('#model-selector button').forEach(b => b.classList.toggle('active', b.getAttribute('data-text')===text));
+            const color = modelColors[modelColors[text] ? text : "AI_GREETING"];
+            document.getElementById('color-picker').value = color; 
+            document.getElementById('color-label').innerText = `🎨 [${text.substring(0,6)}]`;
+            document.getElementById('lucky-star-trigger').style.display = (text === "爱心") ? 'flex' : 'none';
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            const time = Date.now();
+            currentRotY += (targetRotY - currentRotY)*0.08; handOpenScale += (targetScale - handOpenScale)*0.1;
+            particleSystem.rotation.y = currentRotY;
+            const pulse = (currentText === "爱心") ? (1 + Math.sin(time * 0.005) * 0.04) : 1;
+            particleSystem.position.y = Math.sin(time * 0.002) * 10;
+            particleSystem.scale.set(pulse, pulse, pulse);
+            
+            const posAttr = particleSystem.geometry.attributes.position;
+            for (let i=0; i<particleCount; i++) {
+                const i3 = i*3; 
+                positions[i3] += (targets[i3]*handOpenScale - positions[i3])*0.12;
+                positions[i3+1] += (targets[i3+1]*handOpenScale - positions[i3+1])*0.12;
+                positions[i3+2] += (targets[i3+2]*handOpenScale - positions[i3+2])*0.12;
+            }
+            posAttr.needsUpdate = true;
+
+            if ((currentText.includes("新春") || currentText === "Bye-bye 2025" || currentText.length >= 4) && time - lastFireworkTime > 850) {
+                const fw = fireworkPool.find(f => !f.active);
+                if (fw) {
+                    fw.launch((Math.random()-0.5)*450, (Math.random()-0.5)*300, -150, Math.random()*0.6+0.7);
+                    lastFireworkTime = time;
+                }
+            }
+
+            const fP = fireworkParticles.geometry.attributes.position.array, fC = fireworkParticles.geometry.attributes.color.array;
+            fireworkPool.forEach((fw, fIdx) => {
+                fw.update(); fw.ps.forEach((p, pIdx) => {
+                    const idx = (fIdx * 150 + pIdx) * 3;
+                    if(fw.active) { fP[idx]=p.pos.x; fP[idx+1]=p.pos.y; fP[idx+2]=p.pos.z; fC[idx]=p.color.r*p.alpha; fC[idx+1]=p.color.g*p.alpha; fC[idx+2]=p.color.b*p.alpha; }
+                    else fP[idx+1] = -5000;
+                });
+            });
+            fireworkParticles.geometry.attributes.position.needsUpdate = true; fireworkParticles.geometry.attributes.color.needsUpdate = true;
+            renderer.render(scene, camera);
+        }
+
+        // --- 面板拖拽逻辑辅助函数 ---
+        function makeDraggable(elm, handle) {
+            let p1 = 0, p2 = 0, p3 = 0, p4 = 0;
+            handle.onmousedown = (e) => {
+                e.preventDefault(); p3 = e.clientX; p4 = e.clientY;
+                document.onmouseup = () => { document.onmouseup = null; document.onmousemove = null; };
+                document.onmousemove = (e) => {
+                    e.preventDefault(); p1 = p3 - e.clientX; p2 = p4 - e.clientY;
+                    p3 = e.clientX; p4 = e.clientY;
+                    elm.style.top = (elm.offsetTop - p2) + "px"; elm.style.left = (elm.offsetLeft - p1) + "px";
+                };
+            };
+        }
+
+        window.onload = function() {
+            makeDraggable(document.getElementById("draggable-panel"), document.getElementById("panel-handle"));
+            
+            const collapseBtn = document.getElementById('collapse-btn');
+            const panelMain = document.getElementById('panel-main');
+            collapseBtn.onclick = function(e) {
+                e.stopPropagation();
+                const isCollapsed = panelMain.classList.toggle('collapsed');
+                collapseBtn.innerText = isCollapsed ? "展开 ▾" : "收起 ▴";
+            };
+
+            document.getElementById('lucky-star-trigger').onclick = generateAIGreeting;
+            document.getElementById('model-selector').onclick = e => { if(e.target.tagName==='BUTTON') switchModel(e.target.getAttribute('data-text')); };
+            document.getElementById('ai-generate-btn').onclick = generateAIGreeting;
+            document.getElementById('ai-tts-btn').onclick = async () => {
+                const res = await fetchWithRetry(GEMINI_TTS_URL, { contents: [{ parts: [{ text: `Say gently: ${currentText}` }] }], generationConfig: { responseModalities: ["AUDIO"], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: "Aoede" } } } } });
+                if (res?.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data) {
+                    new Audio(URL.createObjectURL(pcmToWav(res.candidates[0].content.parts[0].inlineData.data, 24000))).play();
+                }
+            };
+            document.getElementById('color-picker').oninput = e => { 
+                const k = modelColors[currentText] ? currentText : "AI_GREETING"; 
+                modelColors[k] = e.target.value; generateTextPoints(currentText); 
+            };
+            document.getElementById('fs-btn').onclick = () => document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
+
+            initThree(); 
+            initHandTracking();
+        };
+    </script>
+</body>
+</html>
